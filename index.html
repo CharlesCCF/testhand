@@ -3,9 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hand Gesture Recognition</title>
+    <title>Hand Gesture Recognition using MediaPipe</title>
     <style>
         .container {
+            display: flex;
+        }
+        .video-container, .landmarks-container {
             position: relative;
             width: 640px;
             height: 480px;
@@ -17,6 +20,20 @@
             left: 0;
             top: 0;
         }
+        video {
+            transform: scaleX(-1); /* Mirror the video feed */
+        }
+        .landmarks-container {
+            background: black;
+        }
+        .cursor {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: red;
+            border-radius: 50%;
+            pointer-events: none;
+        }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
@@ -26,25 +43,119 @@
 <body>
     <h1>Hand Gesture Recognition using MediaPipe</h1>
     <div class="container">
-        <video class="input_video"></video>
-        <canvas class="output_canvas" width="640" height="480"></canvas>
+        <div class="video-container">
+            <video class="input_video"></video>
+            <canvas class="output_canvas" width="640" height="480"></canvas>
+            <div class="cursor" id="cursor"></div>
+        </div>
+        <div class="landmarks-container">
+            <canvas class="landmarks_canvas" width="640" height="480"></canvas>
+        </div>
     </div>
+    <div id="error-message" style="color: red;"></div>
     <script type="module">
         const videoElement = document.getElementsByClassName('input_video')[0];
         const canvasElement = document.getElementsByClassName('output_canvas')[0];
         const canvasCtx = canvasElement.getContext('2d');
+        const landmarksCanvasElement = document.getElementsByClassName('landmarks_canvas')[0];
+        const landmarksCanvasCtx = landmarksCanvasElement.getContext('2d');
+        const errorMessage = document.getElementById('error-message');
+        const cursorElement = document.getElementById('cursor');
+
+        function calculateDirection(landmarks) {
+            const indexTip = landmarks[8]; // Index finger tip
+            const indexDip = landmarks[7]; // Index finger DIP joint
+
+            const dx = indexTip.x - indexDip.x;
+            const dy = indexTip.y - indexDip.y;
+
+            let direction, isLeft;
+            if (dx > 0) {
+                direction = "right";
+                isLeft = false;
+            } else {
+                direction = "left";
+                isLeft = true;
+            }
+            return { direction, isLeft, x: indexTip.x };
+        }
+
+        function updateCursor(x) {
+            const cursorX = x * videoElement.clientWidth;
+            cursorElement.style.left = `${cursorX}px`;
+        }
 
         function onResults(results) {
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            // Draw the mirrored image
+            canvasCtx.scale(-1, 1);
+            canvasCtx.translate(-canvasElement.width, 0);
             canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+            canvasCtx.restore();
+
+            landmarksCanvasCtx.save();
+            landmarksCanvasCtx.clearRect(0, 0, landmarksCanvasElement.width, landmarksCanvasElement.height);
+
+            let isLeft = null;
             if (results.multiHandLandmarks) {
                 for (const landmarks of results.multiHandLandmarks) {
-                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
-                    drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 2});
+                    // Mirror the landmarks horizontally
+                    const mirroredLandmarks = landmarks.map((landmark) => ({
+                        ...landmark,
+                        x: 1 - landmark.x
+                    }));
+
+                    // Draw connectors with customized color and line thickness on both canvases
+                    drawConnectors(canvasCtx, mirroredLandmarks, HAND_CONNECTIONS, {
+                        color: '#00FF00', // Change color here
+                        lineWidth: 5 // Change line thickness here
+                    });
+                    drawConnectors(landmarksCanvasCtx, mirroredLandmarks, HAND_CONNECTIONS, {
+                        color: '#00FF00', // Change color here
+                        lineWidth: 5 // Change line thickness here
+                    });
+
+                    // Draw landmarks with customized color and line thickness on both canvases
+                    drawLandmarks(canvasCtx, mirroredLandmarks, {
+                        color: '#FF0000', // Change color here
+                        lineWidth: 2 // Change point size here
+                    });
+                    drawLandmarks(landmarksCanvasCtx, mirroredLandmarks, {
+                        color: '#FF0000', // Change color here
+                        lineWidth: 2 // Change point size here
+                    });
+
+                    const { direction, isLeft: fingerIsLeft, x } = calculateDirection(mirroredLandmarks);
+                    isLeft = fingerIsLeft;
+                    canvasCtx.font = "30px Arial";
+                    canvasCtx.fillStyle = "green";
+                    canvasCtx.fillText(`Pointing ${direction}`, 10, 50);
+
+                    // Update cursor position
+                    updateCursor(x);
                 }
             }
-            canvasCtx.restore();
+
+            landmarksCanvasCtx.restore();
+
+            // Draw circles with hover effect
+            const leftCircleCenter = { x: 150, y: 300 };
+            const rightCircleCenter = { x: 500, y: 300 };
+            const circleRadius = 50;
+
+            const leftColor = isLeft ? 'green' : 'red';
+            const rightColor = isLeft ? 'red' : 'green';
+
+            canvasCtx.beginPath();
+            canvasCtx.arc(leftCircleCenter.x, leftCircleCenter.y, circleRadius, 0, 2 * Math.PI, false);
+            canvasCtx.fillStyle = leftColor;
+            canvasCtx.fill();
+            canvasCtx.beginPath();
+            canvasCtx.arc(rightCircleCenter.x, rightCircleCenter.y, circleRadius, 0, 2 * Math.PI, false);
+            canvasCtx.fillStyle = rightColor;
+            canvasCtx.fill();
         }
 
         const hands = new Hands({
@@ -60,14 +171,23 @@
         });
         hands.onResults(onResults);
 
-        const camera = new Camera(videoElement, {
-            onFrame: async () => {
-                await hands.send({image: videoElement});
-            },
-            width: 640,
-            height: 480
-        });
-        camera.start();
+        async function startCamera() {
+            try {
+                const camera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        await hands.send({ image: videoElement });
+                    },
+                    width: 640,
+                    height: 480
+                });
+                await camera.start();
+            } catch (error) {
+                console.error('Failed to acquire camera feed:', error);
+                errorMessage.textContent = `Failed to acquire camera feed: ${error.message}`;
+            }
+        }
+
+        startCamera();
     </script>
 </body>
 </html>
